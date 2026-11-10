@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-11-10T17:38:38.932506+00:00",
+  "last_updated": "2026-11-10T17:41:41.080361+00:00",
   "grid": {
     "rows": 720,
     "cols": 763,
@@ -243,6 +243,16 @@
         "WV": "frames/WV_2026111016.bin",
         "VIS": "frames/VIS_2026111016.bin",
         "SW": "frames/SW_2026111016.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-10T17:00:00Z",
+      "id": "2026111017",
+      "products": {
+        "LW": "frames/LW_2026111017.bin",
+        "WV": "frames/WV_2026111017.bin",
+        "VIS": "frames/VIS_2026111017.bin",
+        "SW": "frames/SW_2026111017.bin"
       }
     }
   ]
