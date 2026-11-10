@@ -1,12 +1,12 @@
 {
-  "last_updated": "2026-11-10T11:11:58.895248+00:00",
+  "last_updated": "2026-11-10T12:11:21.303725+00:00",
   "grid": {
     "rows": 720,
     "cols": 763,
-    "lat_min": -9.958709716796875,
-    "lat_max": 38.492828369140625,
-    "lon_min": 50.068233489990234,
-    "lon_max": 104.93905639648438
+    "lat_min": -9.959,
+    "lat_max": 38.493,
+    "lon_min": 50.068,
+    "lon_max": 104.939
   },
   "available_products": [
     "LW",
@@ -15,16 +15,6 @@
     "SW"
   ],
   "frames": [
-    {
-      "timestamp": "2026-11-09T12:00:00Z",
-      "id": "2026110912",
-      "products": {
-        "LW": "frames/LW_2026110912.bin",
-        "WV": "frames/WV_2026110912.bin",
-        "VIS": "frames/VIS_2026110912.bin",
-        "SW": "frames/SW_2026110912.bin"
-      }
-    },
     {
       "timestamp": "2026-11-09T13:00:00Z",
       "id": "2026110913",
