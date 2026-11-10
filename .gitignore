@@ -1,0 +1,16 @@
+# Rust intermediate build targets (keep compiled wasm/raster_engine.wasm)
+wasm_src/target/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# OS / Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

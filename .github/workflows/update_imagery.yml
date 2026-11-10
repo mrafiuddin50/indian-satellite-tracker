@@ -1,0 +1,40 @@
+name: Auto Update NOAA GMGSI Satellite Imagery
+
+on:
+  schedule:
+    # Run every hour at minute 25 (shortly after NOAA hourly mosaic completes)
+    - cron: '25 * * * *'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  update-satellite-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install s3fs xarray netCDF4 numpy
+
+      - name: Run GMGSI Extraction Pipeline
+        run: |
+          python pipeline/extract_gmgsi.py
+
+      - name: Commit and push updated frames
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update NOAA GMGSI satellite frames [skip ci]" && git push)

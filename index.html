@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Indian Ocean Satellite Radar | Real-Time NOAA GMGSI</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <!-- Fullscreen Map Container -->
+    <div id="map"></div>
+
+    <!-- Top HUD Navigation -->
+    <header class="top-hud">
+        <!-- Brand & Status -->
+        <div class="hud-panel brand-section">
+            <div class="brand-logo">&#9729;</div>
+            <div>
+                <div class="brand-title">
+                    INSAT / GMGSI Satellite Radar
+                    <span class="badge-live">LIVE</span>
+                </div>
+                <div class="brand-sub">North Indian Ocean &middot; Arabian Sea &middot; Bay of Bengal</div>
+            </div>
+        </div>
+
+        <!-- Satellite Band / Product Selector -->
+        <div class="hud-panel">
+            <div class="product-selector">
+                <button class="btn-prod active" data-prod="LW" title="Longwave Infrared (10.8 µm) - Day/Night Cloud Tops">Infrared (LWIR)</button>
+                <button class="btn-prod" data-prod="WV" title="Water Vapor (6.7 µm) - Tropospheric Moisture & Dynamics">Water Vapor (WV)</button>
+                <button class="btn-prod" data-prod="VIS" title="Visible (0.6 µm) - Daylight Reflectance">Visible (VIS)</button>
+                <button class="btn-prod" data-prod="SW" title="Shortwave Infrared (3.9 µm) - Night Fog, Low Stratus & Hotspots">Shortwave (SWIR)</button>
+            </div>
+        </div>
+
+        <!-- Live Clock -->
+        <div class="hud-panel time-display">
+            <div class="time-ist" id="clock-ist">--:--:-- IST</div>
+            <div class="time-utc" id="clock-utc">--:--:-- UTC</div>
+        </div>
+    </header>
+
+    <!-- Floating Telemetry / Probe Card -->
+    <aside class="hud-panel telemetry-card" id="telemetry-card">
+        <div class="telemetry-row">
+            <span class="telemetry-label">Cursor Probe</span>
+            <span class="telemetry-val" id="tel-lat">--</span>, <span class="telemetry-val" id="tel-lon">--</span>
+        </div>
+        <div class="telemetry-row" style="margin-top: 4px;">
+            <span class="telemetry-label">Brightness Temp</span>
+            <span class="telemetry-temp" id="tel-temp">--</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="telemetry-label">Digital Count (0-255)</span>
+            <span class="telemetry-val" id="tel-raw">--</span>
+        </div>
+        <div class="convection-tag" id="tel-convection">Hover over map to probe</div>
+    </aside>
+
+    <!-- Bottom Control Deck -->
+    <footer class="bottom-deck">
+        <!-- Playback and Timeline Bar -->
+        <div class="hud-panel timeline-card">
+            <div class="playback-controls">
+                <button class="btn-ctrl" id="btn-play" title="Play / Pause Animation Loop">&#9654;</button>
+                <button class="btn-ctrl" id="btn-prev" title="Step Backward">&#9664;&#9664;</button>
+                <button class="btn-ctrl" id="btn-next" title="Step Forward">&#9654;&#9654;</button>
+                
+                <div class="timeline-slider-container">
+                    <input type="range" class="timeline-slider" id="timeline-slider" min="0" max="0" value="0">
+                </div>
+
+                <div class="current-frame-badge" id="frame-timestamp">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Secondary Controls & Legend -->
+        <div class="hud-panel controls-row">
+            <div class="settings-bar">
+                <div class="setting-group">
+                    <label for="basemap-select" class="telemetry-label">Basemap:</label>
+                    <select id="basemap-select" class="setting-select">
+                        <option value="esri-dark">Dark Canvas (Esri - Free)</option>
+                        <option value="esri-sat">True Color Satellite</option>
+                        <option value="osm">OpenStreetMap</option>
+                        <option value="esri-ocean">Ocean Bathymetry</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <label for="palette-select" class="telemetry-label">Color Palette:</label>
+                    <select id="palette-select" class="setting-select">
+                        <option value="0">BD Enhanced IR (Cyclone / Convection)</option>
+                        <option value="1">White-Hot (Grayscale)</option>
+                        <option value="2">Black-Hot (Inverted)</option>
+                        <option value="3">Rainbow / Turbo Spectrum</option>
+                        <option value="4">Water Vapor Moisture</option>
+                        <option value="5">Visible Enhanced</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <button class="toggle-btn" id="toggle-convection" title="Highlight deep convective clouds < -55°C">
+                        ⚡ Convection Alert
+                    </button>
+                    <button class="toggle-btn active" id="toggle-borders" title="Toggle India State Boundaries">
+                        🇮🇳 State Borders
+                    </button>
+                </div>
+
+                <div class="setting-group">
+                    <label for="opacity-slider" class="telemetry-label">Opacity:</label>
+                    <input type="range" id="opacity-slider" min="0.1" max="1.0" step="0.05" value="0.85" style="width: 70px;">
+                </div>
+
+                <input type="hidden" id="brightness-slider" value="0.0">
+                <input type="hidden" id="contrast-slider" value="1.0">
+            </div>
+
+            <!-- Meteorological Gradient Legend -->
+            <div class="legend-panel" style="min-width: 220px; flex: 1; max-width: 320px;">
+                <div class="legend-ticks">
+                    <span id="leg-min">+40°C</span>
+                    <span id="leg-max">-85°C</span>
+                </div>
+                <div class="legend-bar" id="legend-gradient"></div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Application Scripts -->
+    <script src="js/wasm_engine.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

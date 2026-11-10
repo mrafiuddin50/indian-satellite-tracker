@@ -1,0 +1,5 @@
+s3fs>=2024.3.0
+xarray>=2024.3.0
+netCDF4>=1.6.5
+numpy>=1.26.0
+geopandas>=0.14.0
