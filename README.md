@@ -1,4 +1,4 @@
-# 🛰️ NOAA GMGSI Real-Time Indian Ocean Satellite Radar
+# 🛰️ India Satellite Tracker - GMGSI
 
 High-performance WebAssembly (WASM) application to visualize real-time geostationary satellite imagery over the Indian subcontinent, Arabian Sea, Bay of Bengal, Sri Lanka, and equatorial Indian Ocean from NOAA's Global Mosaic of Geostationary Satellite Imagery ([NOAA GMGSI on AWS Open Data](https://registry.opendata.aws/noaa-gmgsi/)).
 
