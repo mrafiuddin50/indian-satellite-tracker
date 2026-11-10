@@ -2,8 +2,9 @@ name: Auto Update Satellite Imagery & Deploy to Pages
 
 on:
   schedule:
-    # Run hourly at minute 40 (after NOAA finishes the hourly mosaic around minute 35)
-    - cron: '40 * * * *'
+    # Run twice an hour at minute 15 and 45 (NOAA mosaic ready around minute 35)
+    # Running at :45 catches new images promptly, :15 catches any NOAA or Actions lag
+    - cron: '15,45 * * * *'
   push:
     branches: ["main"]
   workflow_dispatch:
@@ -15,7 +16,7 @@ permissions:
 
 concurrency:
   group: "pages"
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   update-satellite-data:
@@ -23,6 +24,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -33,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install s3fs xarray netCDF4 numpy
+          pip install s3fs xarray netCDF4 h5netcdf scipy numpy
 
       - name: Run GMGSI Extraction Pipeline
         run: |
@@ -44,7 +47,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update NOAA GMGSI satellite frames" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update NOAA GMGSI satellite frames [skip ci]" && git pull --rebase origin main && git push)
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

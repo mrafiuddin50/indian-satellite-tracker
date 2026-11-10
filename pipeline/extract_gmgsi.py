@@ -3,6 +3,7 @@ import sys
 import json
 import glob
 import datetime
+import tempfile
 import numpy as np
 import xarray as xr
 import s3fs
@@ -22,7 +23,7 @@ PRODUCTS = {
 
 HOURS_TO_KEEP = 24
 
-def get_recent_hours(hours_back=12):
+def get_recent_hours(hours_back=24):
     now = datetime.datetime.now(datetime.timezone.utc)
     return [now - datetime.timedelta(hours=i) for i in reversed(range(hours_back))]
 
@@ -38,27 +39,36 @@ def find_s3_file(fs, product_dir, dt):
     return None
 
 def process_file(fs, file_path):
-    with fs.open(file_path) as f:
-        ds = xr.open_dataset(f)
-        lats = ds.lat[:, 0].values
-        lons = ds.lon[0, :].values
+    with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        fs.get(file_path, tmp_path)
+        with xr.open_dataset(tmp_path) as ds:
+            lats = ds.lat[:, 0].values
+            lons = ds.lon[0, :].values
 
-        lat_mask = (lats >= LAT_MIN) & (lats <= LAT_MAX)
-        lon_mask = (lons >= LON_MIN) & (lons <= LON_MAX)
+            lat_mask = (lats >= LAT_MIN) & (lats <= LAT_MAX)
+            lon_mask = (lons >= LON_MIN) & (lons <= LON_MAX)
 
-        lat_idx = np.where(lat_mask)[0]
-        lon_idx = np.where(lon_mask)[0]
+            lat_idx = np.where(lat_mask)[0]
+            lon_idx = np.where(lon_mask)[0]
 
-        sub_data = ds['data'].values[0, lat_idx.min():lat_idx.max()+1, lon_idx.min():lon_idx.max()+1]
-        
-        # Normalize and convert to uint8
-        sub_data = np.nan_to_num(sub_data, nan=0.0)
-        sub_data = np.clip(sub_data, 0, 255).astype(np.uint8)
+            sub_data = ds['data'].values[0, lat_idx.min():lat_idx.max()+1, lon_idx.min():lon_idx.max()+1]
+            
+            # Normalize and convert to uint8
+            sub_data = np.nan_to_num(sub_data, nan=0.0)
+            sub_data = np.clip(sub_data, 0, 255).astype(np.uint8)
 
-        lat_bounds = [float(lats[lat_idx.max()]), float(lats[lat_idx.min()])]
-        lon_bounds = [float(lons[lon_idx.min()]), float(lons[lon_idx.max()])]
+            lat_bounds = [float(lats[lat_idx.max()]), float(lats[lat_idx.min()])]
+            lon_bounds = [float(lons[lon_idx.min()]), float(lons[lon_idx.max()])]
 
-        return sub_data, lat_bounds, lon_bounds, sub_data.shape
+            return sub_data, lat_bounds, lon_bounds, sub_data.shape
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 def prune_old_frames(frames_dir, valid_filenames):
     for f in glob.glob(os.path.join(frames_dir, '*.bin')):
@@ -97,10 +107,9 @@ def main():
         has_any = False
         for prod_key, prod_dir in PRODUCTS.items():
             bin_filename = f"{prod_key}_{dt_str}.bin"
-            all_created_files.add(bin_filename)
             bin_path = os.path.join(frames_dir, bin_filename)
             
-            if not os.path.exists(bin_path):
+            if not os.path.exists(bin_path) or os.path.getsize(bin_path) == 0:
                 s3_file = find_s3_file(fs, prod_dir, dt)
                 if not s3_file:
                     continue
@@ -123,6 +132,8 @@ def main():
                     has_any = True
                 except Exception as e:
                     print(f"Error processing {s3_file}: {e}")
+                    if os.path.exists(bin_path):
+                        os.remove(bin_path)
                     continue
             else:
                 has_any = True
@@ -132,8 +143,14 @@ def main():
         if has_any:
             frames_meta.append(frame_entry)
 
-    # Prune frames older than HOURS_TO_KEEP
-    prune_old_frames(frames_dir, all_created_files)
+    # Prune frames that are no longer in our 24h window (only if we have sufficient frames)
+    valid_filenames = set()
+    for fm in frames_meta:
+        for p_path in fm.get('products', {}).values():
+            valid_filenames.add(os.path.basename(p_path))
+
+    if len(frames_meta) >= 12:
+        prune_old_frames(frames_dir, valid_filenames)
 
     if grid_meta is None:
         grid_meta = {
