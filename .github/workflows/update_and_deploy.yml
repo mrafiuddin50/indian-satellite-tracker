@@ -1,18 +1,25 @@
-name: Auto Update NOAA GMGSI Satellite Imagery
+name: Auto Update Satellite Imagery & Deploy to Pages
 
 on:
   schedule:
-    # Run every hour at minute 25 (shortly after NOAA hourly mosaic completes)
-    - cron: '25 * * * *'
-  workflow_dispatch: # Allows manual trigger anytime from GitHub UI
+    # Run every hour at minute 40 (after NOAA finishes the hourly mosaic around minute 35)
+    - cron: '40 * * * *'
+  push:
+    branches: ["main"]
+  workflow_dispatch:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   update-satellite-data:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,4 +44,16 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update NOAA GMGSI satellite frames [skip ci]" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update NOAA GMGSI satellite frames" && git push)
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
