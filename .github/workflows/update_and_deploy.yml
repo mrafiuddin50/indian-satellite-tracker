@@ -2,7 +2,7 @@ name: Auto Update Satellite Imagery & Deploy to Pages
 
 on:
   schedule:
-    # Run every hour at minute 40 (after NOAA finishes the hourly mosaic around minute 35)
+    # Run hourly at minute 40 (after NOAA finishes the hourly mosaic around minute 35)
     - cron: '40 * * * *'
   push:
     branches: ["main"]
@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   group: "pages"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   update-satellite-data:
@@ -49,10 +49,15 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      - name: Stage website files
+        run: |
+          mkdir -p _site
+          cp -r index.html css js wasm data .nojekyll _site/
+
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: '_site'
 
       - name: Deploy to GitHub Pages
         id: deployment
