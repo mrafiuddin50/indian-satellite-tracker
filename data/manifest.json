@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-11-11T02:17:02.687701+00:00",
+  "last_updated": "2026-11-11T09:52:09.639068+00:00",
   "grid": {
     "rows": 720,
     "cols": 763,
@@ -15,76 +15,6 @@
     "SW"
   ],
   "frames": [
-    {
-      "timestamp": "2026-11-10T03:00:00Z",
-      "id": "2026111003",
-      "products": {
-        "LW": "frames/LW_2026111003.bin",
-        "WV": "frames/WV_2026111003.bin",
-        "VIS": "frames/VIS_2026111003.bin",
-        "SW": "frames/SW_2026111003.bin"
-      }
-    },
-    {
-      "timestamp": "2026-11-10T04:00:00Z",
-      "id": "2026111004",
-      "products": {
-        "LW": "frames/LW_2026111004.bin",
-        "WV": "frames/WV_2026111004.bin",
-        "VIS": "frames/VIS_2026111004.bin",
-        "SW": "frames/SW_2026111004.bin"
-      }
-    },
-    {
-      "timestamp": "2026-11-10T05:00:00Z",
-      "id": "2026111005",
-      "products": {
-        "LW": "frames/LW_2026111005.bin",
-        "WV": "frames/WV_2026111005.bin",
-        "VIS": "frames/VIS_2026111005.bin",
-        "SW": "frames/SW_2026111005.bin"
-      }
-    },
-    {
-      "timestamp": "2026-11-10T06:00:00Z",
-      "id": "2026111006",
-      "products": {
-        "LW": "frames/LW_2026111006.bin",
-        "WV": "frames/WV_2026111006.bin",
-        "VIS": "frames/VIS_2026111006.bin",
-        "SW": "frames/SW_2026111006.bin"
-      }
-    },
-    {
-      "timestamp": "2026-11-10T07:00:00Z",
-      "id": "2026111007",
-      "products": {
-        "LW": "frames/LW_2026111007.bin",
-        "WV": "frames/WV_2026111007.bin",
-        "VIS": "frames/VIS_2026111007.bin",
-        "SW": "frames/SW_2026111007.bin"
-      }
-    },
-    {
-      "timestamp": "2026-11-10T08:00:00Z",
-      "id": "2026111008",
-      "products": {
-        "LW": "frames/LW_2026111008.bin",
-        "WV": "frames/WV_2026111008.bin",
-        "VIS": "frames/VIS_2026111008.bin",
-        "SW": "frames/SW_2026111008.bin"
-      }
-    },
-    {
-      "timestamp": "2026-11-10T09:00:00Z",
-      "id": "2026111009",
-      "products": {
-        "LW": "frames/LW_2026111009.bin",
-        "WV": "frames/WV_2026111009.bin",
-        "VIS": "frames/VIS_2026111009.bin",
-        "SW": "frames/SW_2026111009.bin"
-      }
-    },
     {
       "timestamp": "2026-11-10T10:00:00Z",
       "id": "2026111010",
@@ -243,6 +173,86 @@
         "WV": "frames/WV_2026111101.bin",
         "VIS": "frames/VIS_2026111101.bin",
         "SW": "frames/SW_2026111101.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T02:00:00Z",
+      "id": "2026111102",
+      "products": {
+        "LW": "frames/LW_2026111102.bin",
+        "WV": "frames/WV_2026111102.bin",
+        "VIS": "frames/VIS_2026111102.bin",
+        "SW": "frames/SW_2026111102.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T03:00:00Z",
+      "id": "2026111103",
+      "products": {
+        "LW": "frames/LW_2026111103.bin",
+        "WV": "frames/WV_2026111103.bin",
+        "VIS": "frames/VIS_2026111103.bin",
+        "SW": "frames/SW_2026111103.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T04:00:00Z",
+      "id": "2026111104",
+      "products": {
+        "LW": "frames/LW_2026111104.bin",
+        "WV": "frames/WV_2026111104.bin",
+        "VIS": "frames/VIS_2026111104.bin",
+        "SW": "frames/SW_2026111104.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T05:00:00Z",
+      "id": "2026111105",
+      "products": {
+        "LW": "frames/LW_2026111105.bin",
+        "WV": "frames/WV_2026111105.bin",
+        "VIS": "frames/VIS_2026111105.bin",
+        "SW": "frames/SW_2026111105.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T06:00:00Z",
+      "id": "2026111106",
+      "products": {
+        "LW": "frames/LW_2026111106.bin",
+        "WV": "frames/WV_2026111106.bin",
+        "VIS": "frames/VIS_2026111106.bin",
+        "SW": "frames/SW_2026111106.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T07:00:00Z",
+      "id": "2026111107",
+      "products": {
+        "LW": "frames/LW_2026111107.bin",
+        "WV": "frames/WV_2026111107.bin",
+        "VIS": "frames/VIS_2026111107.bin",
+        "SW": "frames/SW_2026111107.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T08:00:00Z",
+      "id": "2026111108",
+      "products": {
+        "LW": "frames/LW_2026111108.bin",
+        "WV": "frames/WV_2026111108.bin",
+        "VIS": "frames/VIS_2026111108.bin",
+        "SW": "frames/SW_2026111108.bin"
+      }
+    },
+    {
+      "timestamp": "2026-11-11T09:00:00Z",
+      "id": "2026111109",
+      "products": {
+        "LW": "frames/LW_2026111109.bin",
+        "WV": "frames/WV_2026111109.bin",
+        "VIS": "frames/VIS_2026111109.bin",
+        "SW": "frames/SW_2026111109.bin"
       }
     }
   ]
