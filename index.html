@@ -3,19 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#0b0f19">
+    <meta name="theme-color" content="#070b12">
     <meta name="description" content="Near-real-time NOAA GMGSI geostationary satellite imagery over India and the North Indian Ocean.">
     <title>India Satellite Tracker - GMGSI</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230ea5e9'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='white' stroke-width='2.5'/%3E%3Cpath d='M4 22 Q16 4 28 10' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1220'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='%2367e8f9' stroke-width='2.5'/%3E%3Cpath d='M4 22 Q16 4 28 10' fill='none' stroke='%2367e8f9' stroke-width='2'/%3E%3C/svg%3E">
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
     <div id="map"></div>
+    <div class="vignette" aria-hidden="true"></div>
 
-    <!-- Loading / error overlay -->
+    <!-- Loading / error -->
     <div class="loader" id="loader">
         <div class="loader-card">
             <div class="spinner"></div>
@@ -23,139 +27,137 @@
         </div>
     </div>
 
-    <!-- Top HUD -->
-    <header class="top-hud">
-        <div class="hud-panel brand-section">
-            <div class="brand-logo" aria-hidden="true">
-                <svg viewBox="0 0 32 32" width="20" height="20"><circle cx="16" cy="16" r="6" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M3 23 Q16 3 29 10" fill="none" stroke="#fff" stroke-width="2"/></svg>
-            </div>
-            <div class="brand-text">
-                <div class="brand-title">India Satellite Tracker <span class="brand-dim">· GMGSI</span></div>
-                <button class="status-chip" id="status-chip" title="Data freshness">
-                    <span class="status-dot"></span>
-                    <span id="status-text">Checking…</span>
-                </button>
-            </div>
-            <button class="icon-btn" id="btn-info" title="About this data (i)" aria-label="About this data">i</button>
+    <!-- ===== Top-left: identity & freshness ===== -->
+    <header class="glass brand" id="brand">
+        <div class="brand-logo" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="20" height="20"><circle cx="16" cy="16" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M3 23 Q16 3 29 10" fill="none" stroke="currentColor" stroke-width="2"/></svg>
         </div>
-
-        <div class="hud-panel product-panel">
-            <div class="product-selector" role="tablist">
-                <button class="btn-prod active" data-prod="LW" title="Longwave Infrared (10.8 µm) - day/night cloud tops [1]">Infrared</button>
-                <button class="btn-prod" data-prod="WV" title="Water Vapour (6.7 µm) - upper-tropospheric moisture [2]">Water Vapour</button>
-                <button class="btn-prod" data-prod="VIS" title="Visible (0.6 µm) - daylight only [3]">Visible</button>
-                <button class="btn-prod" data-prod="SW" title="Shortwave Infrared (3.9 µm) - night fog, low stratus, hotspots [4]">Shortwave</button>
-            </div>
+        <div class="brand-text">
+            <h1 class="brand-title">India Satellite Tracker</h1>
+            <div class="brand-sub">NOAA GMGSI · North Indian Ocean</div>
         </div>
-
-        <div class="hud-panel time-display">
-            <div class="time-ist" id="clock-ist">--:--:-- IST</div>
-            <div class="time-utc" id="clock-utc">--:--:-- UTC</div>
-        </div>
+        <button class="status-chip" id="status-chip" title="Data freshness">
+            <span class="status-dot"></span>
+            <span id="status-text">Checking…</span>
+        </button>
+        <button class="icon-btn" id="btn-info" title="About this data (I)" aria-label="About this data">
+            <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 10.5v6M12 7.2v.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
     </header>
 
-    <!-- Probe card -->
-    <aside class="hud-panel telemetry-card" id="telemetry-card">
-        <div class="telemetry-head">
-            <span class="telemetry-label">Cursor probe</span>
-            <span class="telemetry-coords"><span id="tel-lat">--</span>, <span id="tel-lon">--</span></span>
-        </div>
-        <div class="telemetry-row">
-            <span class="telemetry-label" id="tel-temp-label">Brightness temp (approx.)</span>
-            <span class="telemetry-temp" id="tel-temp">--</span>
-        </div>
-        <div class="telemetry-row">
-            <span class="telemetry-label">Digital count (0–255)</span>
-            <span class="telemetry-val" id="tel-raw">--</span>
-        </div>
-        <div class="convection-tag" id="tel-convection">Hover or tap the map to probe</div>
-    </aside>
+    <!-- ===== Top-centre: channel ===== -->
+    <nav class="glass channels" role="tablist" aria-label="Satellite channel">
+        <button class="chan active" data-prod="LW" title="Longwave infrared, day and night cloud tops [1]"><span class="chan-name">Infrared</span><span class="chan-wl">10.8 µm</span></button>
+        <button class="chan" data-prod="WV" title="Water vapour, upper-tropospheric moisture [2]"><span class="chan-name">Water vapour</span><span class="chan-wl">6.7 µm</span></button>
+        <button class="chan" data-prod="VIS" title="Visible, daylight only [3]"><span class="chan-name">Visible</span><span class="chan-wl">0.6 µm</span></button>
+        <button class="chan" data-prod="SW" title="Shortwave infrared, night fog and hotspots [4]"><span class="chan-name">Shortwave</span><span class="chan-wl">3.9 µm</span></button>
+    </nav>
 
-    <!-- Bottom control deck -->
-    <footer class="bottom-deck">
-        <div class="hud-panel timeline-card">
-            <div class="playback-controls">
-                <button class="btn-ctrl" id="btn-prev" title="Previous frame (←)" aria-label="Previous frame">
-                    <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 5h2v14H6zM20 5v14L9 12z" fill="currentColor"/></svg>
-                </button>
-                <button class="btn-ctrl btn-play" id="btn-play" title="Play / pause (Space)" aria-label="Play">
-                    <svg id="icon-play" viewBox="0 0 24 24" width="18" height="18"><path d="M7 4v16l13-8z" fill="currentColor"/></svg>
-                    <svg id="icon-pause" viewBox="0 0 24 24" width="18" height="18" hidden><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="currentColor"/></svg>
-                </button>
-                <button class="btn-ctrl" id="btn-next" title="Next frame (→)" aria-label="Next frame">
-                    <svg viewBox="0 0 24 24" width="16" height="16"><path d="M16 5h2v14h-2zM4 5v14l11-7z" fill="currentColor"/></svg>
-                </button>
+    <!-- ===== Top-right: layers + probe ===== -->
+    <div class="right-stack">
+        <button class="glass layers-btn" id="btn-layers" aria-expanded="false" aria-controls="layers-panel" title="Layers and display (L)">
+            <svg viewBox="0 0 24 24" width="17" height="17"><path d="M12 3 2.5 8 12 13l9.5-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m2.5 12 9.5 5 9.5-5M2.5 16l9.5 5 9.5-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+            <span>Layers</span>
+        </button>
 
-                <div class="timeline-wrap">
-                    <input type="range" class="timeline-slider" id="timeline-slider" min="0" max="0" value="0" aria-label="Timeline">
-                    <div class="timeline-ticks" id="timeline-ticks"></div>
+        <section class="glass layers-panel" id="layers-panel" hidden>
+            <div class="panel-title">Basemap</div>
+            <div class="basemap-grid" id="basemap-grid">
+                <button class="bm active" data-basemap="esri-dark"><span class="bm-sw sw-dark"></span>Dark</button>
+                <button class="bm" data-basemap="esri-sat"><span class="bm-sw sw-sat"></span>Satellite</button>
+                <button class="bm" data-basemap="esri-ocean"><span class="bm-sw sw-ocean"></span>Ocean</button>
+                <button class="bm" data-basemap="osm"><span class="bm-sw sw-osm"></span>Streets</button>
+            </div>
+
+            <div class="panel-title">Colour palette</div>
+            <select id="palette-select" class="select">
+                <option value="0">BD enhanced IR (cyclone)</option>
+                <option value="1">White-hot greyscale</option>
+                <option value="2">Black-hot greyscale</option>
+                <option value="3">Rainbow spectrum</option>
+                <option value="4">Water-vapour moisture</option>
+                <option value="5">Visible enhanced</option>
+            </select>
+
+            <div class="panel-title">Overlays</div>
+            <label class="switch"><input type="checkbox" id="toggle-labels" checked><span class="track"></span>Place names</label>
+            <label class="switch"><input type="checkbox" id="toggle-borders" checked><span class="track"></span>State boundaries</label>
+            <label class="switch"><input type="checkbox" id="toggle-convection"><span class="track"></span>Highlight deep convection</label>
+
+            <div class="panel-title">Imagery opacity <span class="panel-val" id="opacity-val">85%</span></div>
+            <input type="range" id="opacity-slider" class="range" min="0.1" max="1" step="0.05" value="0.85">
+        </section>
+
+        <aside class="glass probe" id="probe">
+            <div class="probe-head">
+                <span class="probe-label">Probe</span>
+                <span class="probe-coords mono" id="tel-coords">Move over the map</span>
+            </div>
+            <div class="probe-main">
+                <span class="probe-swatch" id="tel-swatch"></span>
+                <span class="probe-value" id="tel-temp">--</span>
+                <span class="probe-unit" id="tel-unit"></span>
+            </div>
+            <div class="probe-foot">
+                <span class="probe-class" id="tel-class">—</span>
+                <span class="probe-raw mono" id="tel-raw"></span>
+            </div>
+        </aside>
+    </div>
+
+    <!-- ===== Bottom dock ===== -->
+    <footer class="glass dock">
+        <div class="dock-row">
+            <div class="readout">
+                <div class="readout-time" id="frame-time">--:--</div>
+                <div class="readout-sub" id="frame-sub">Loading…</div>
+            </div>
+
+            <div class="transport">
+                <button class="tbtn" id="btn-prev" title="Previous frame (←)" aria-label="Previous frame">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 5h2v14H6zM19 5v14L9 12z" fill="currentColor"/></svg>
+                </button>
+                <button class="tbtn play" id="btn-play" title="Play / pause (Space)" aria-label="Play">
+                    <svg id="icon-play" viewBox="0 0 24 24" width="18" height="18"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                    <svg id="icon-pause" viewBox="0 0 24 24" width="18" height="18" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>
+                </button>
+                <button class="tbtn" id="btn-next" title="Next frame (→)" aria-label="Next frame">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path d="M16 5h2v14h-2zM5 5v14l10-7z" fill="currentColor"/></svg>
+                </button>
+            </div>
+
+            <div class="timeline" id="timeline">
+                <div class="tl-track" id="tl-track">
+                    <div class="tl-segs" id="tl-segs"></div>
+                    <div class="tl-progress" id="tl-progress"></div>
                 </div>
+                <input type="range" class="tl-input" id="timeline-slider" min="0" max="0" value="0" aria-label="Timeline">
+                <div class="tl-ticks" id="timeline-ticks"></div>
+                <div class="tl-hover" id="tl-hover" hidden></div>
+            </div>
 
-                <div class="frame-info">
-                    <div class="current-frame-badge" id="frame-timestamp">Loading…</div>
-                    <div class="frame-sub" id="frame-sub">&nbsp;</div>
-                </div>
-
-                <select id="speed-select" class="setting-select speed-select" title="Animation speed">
+            <div class="dock-end">
+                <select id="speed-select" class="select select-sm" title="Animation speed" aria-label="Animation speed">
                     <option value="1200">0.5×</option>
                     <option value="600" selected>1×</option>
                     <option value="300">2×</option>
                     <option value="150">4×</option>
                 </select>
-                <button class="btn-ctrl btn-latest" id="btn-latest" title="Jump to latest frame (End)">Latest</button>
+                <button class="pill-btn" id="btn-latest" title="Jump to latest frame (End)">Latest</button>
             </div>
         </div>
 
-        <div class="hud-panel controls-row" id="controls-row">
-            <button class="toggle-btn layers-toggle" id="btn-layers" aria-expanded="false">Layers &amp; palette ▾</button>
-            <div class="settings-bar" id="settings-bar">
-                <div class="setting-group">
-                    <label for="basemap-select" class="telemetry-label">Basemap</label>
-                    <select id="basemap-select" class="setting-select">
-                        <option value="esri-dark">Dark canvas</option>
-                        <option value="esri-sat">True-colour satellite</option>
-                        <option value="osm">OpenStreetMap</option>
-                        <option value="esri-ocean">Ocean bathymetry</option>
-                    </select>
-                </div>
-
-                <div class="setting-group">
-                    <label for="palette-select" class="telemetry-label">Palette</label>
-                    <select id="palette-select" class="setting-select">
-                        <option value="0">BD enhanced IR (cyclone)</option>
-                        <option value="1">White-hot (greyscale)</option>
-                        <option value="2">Black-hot (inverted)</option>
-                        <option value="3">Rainbow spectrum</option>
-                        <option value="4">Water-vapour moisture</option>
-                        <option value="5">Visible enhanced</option>
-                    </select>
-                </div>
-
-                <div class="setting-group">
-                    <button class="toggle-btn" id="toggle-convection" title="Highlight deep convective cloud tops (C)">⚡ Convection</button>
-                    <button class="toggle-btn active" id="toggle-borders" title="Toggle state boundaries (B)">State borders</button>
-                </div>
-
-                <div class="setting-group">
-                    <label for="opacity-slider" class="telemetry-label">Opacity</label>
-                    <input type="range" id="opacity-slider" min="0.1" max="1.0" step="0.05" value="0.85">
-                </div>
-            </div>
-
-            <div class="legend-panel">
-                <div class="legend-bar" id="legend-gradient"></div>
-                <div class="legend-ticks">
-                    <span id="leg-min">+40°C</span>
-                    <span id="leg-max">-85°C</span>
-                </div>
+        <div class="legend">
+            <span class="legend-title" id="legend-title">Cloud-top temperature</span>
+            <div class="legend-scale">
+                <canvas id="legend-canvas" width="256" height="1"></canvas>
+                <div class="legend-ticks" id="legend-ticks"></div>
             </div>
         </div>
     </footer>
 
-    <!-- Toast -->
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-    <!-- About dialog -->
     <dialog class="info-dialog" id="info-dialog">
         <form method="dialog">
             <h2>About this imagery</h2>
@@ -165,9 +167,9 @@
             <p><strong>Why the newest frame is never "now":</strong> the frame labelled HH:00 UTC is built from scans taken around that time, and NOAA publishes it roughly 35–40 minutes later.
                 This site checks NOAA continuously and normally shows a new frame within a few minutes of it being published, so the latest frame is usually 40–100 minutes old.</p>
             <p><strong>Temperature probe:</strong> values are converted from the 0–255 mosaic counts with a simple linear approximation and are indicative only.</p>
-            <p class="dlg-keys"><strong>Keyboard:</strong> <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>End</kbd> latest · <kbd>1</kbd>–<kbd>4</kbd> channel · <kbd>C</kbd> convection · <kbd>B</kbd> borders</p>
+            <p class="dlg-keys"><strong>Keyboard:</strong> <kbd>Space</kbd> play/pause · <kbd>←</kbd> <kbd>→</kbd> step · <kbd>End</kbd> latest · <kbd>1</kbd>–<kbd>4</kbd> channel · <kbd>L</kbd> layers · <kbd>C</kbd> convection · <kbd>B</kbd> boundaries</p>
             <p class="dlg-meta" id="dlg-meta"></p>
-            <div class="dlg-actions"><button class="toggle-btn" value="close">Close</button></div>
+            <div class="dlg-actions"><button class="pill-btn" value="close">Close</button></div>
         </form>
     </dialog>
 
