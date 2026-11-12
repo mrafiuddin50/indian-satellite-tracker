@@ -1,421 +1,564 @@
 /**
- * Main Application Logic
- * Integrates Leaflet Map, WebAssembly Raster Engine, India State Shapefile, and Timeline Controller.
+ * India Satellite Tracker - main application
+ * Leaflet map + WebAssembly raster engine + live manifest polling.
  */
+(() => {
+    'use strict';
 
-document.addEventListener('DOMContentLoaded', async () => {
-    // 1. Initialize State
-    let manifest = null;
-    let indiaGeoJSON = null;
-    let wasmEngine = null;
-    let currentProduct = 'LW';
-    let currentPalette = 0; // 0 = BD Enhanced IR
-    let currentFrameIdx = 0;
-    let isPlaying = false;
-    let playbackInterval = null;
-    let playbackSpeed = 800; // ms per frame
-    let rasterOverlay = null;
-    let rawFrameCache = new Map(); // frame_id -> Uint8Array
-    let isConvectionMode = false;
-    let rasterOpacity = 0.85;
+    const PRODUCT_NAMES = { LW: 'Infrared', WV: 'Water Vapour', VIS: 'Visible', SW: 'Shortwave IR' };
+    const DEFAULT_PALETTE = { LW: 0, WV: 4, VIS: 5, SW: 1 };
+    const MANIFEST_REFRESH_MS = 4 * 60 * 1000;
+    const PREFETCH_CONCURRENCY = 4;
+    const FRESH_MIN = 105;   // NOAA publishes ~40 min after nominal time + up to 60 min until the next hour
+    const DELAYED_MIN = 180;
 
-    // 2. Initialize Map
-    const map = L.map('map', {
-        center: [15.0, 78.0],
-        zoom: 5,
-        minZoom: 4,
-        maxZoom: 9,
-        zoomControl: false,
-        attributionControl: false
-    });
+    const $ = (id) => document.getElementById(id);
 
-    // Free, open basemaps with NO API KEY required
-    const basemapLayers = {
-        'esri-dark': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16 }),
-        'esri-sat': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 18 }),
-        'osm': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }),
-        'esri-ocean': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 13 })
+    // ---------------------------------------------------------------- state
+    const state = {
+        manifest: null,
+        product: 'LW',
+        palette: 0,
+        frameIdx: 0,
+        playing: false,
+        speed: 600,
+        convection: false,
+        opacity: 0.85,
+        followLatest: true,
     };
-    let currentBasemap = basemapLayers['esri-dark'].addTo(map);
+    const frameCache = new Map();     // key -> Uint8Array
+    const inflight = new Map();       // key -> Promise
+    let prefetchToken = 0;
+    let renderToken = 0;
+    let wasm = null;
+    let overlay = null;
+    let stateLayer = null;
 
-    const basemapSelect = document.getElementById('basemap-select');
-    if (basemapSelect) {
-        basemapSelect.addEventListener('change', (e) => {
-            map.removeLayer(currentBasemap);
-            currentBasemap = basemapLayers[e.target.value].addTo(map);
-            if (rasterOverlay) rasterOverlay.bringToFront();
-            if (stateLayer) stateLayer.bringToFront();
-        });
-    }
-
-    // Zoom control at top-left below HUD
-    L.control.zoom({ position: 'topleft' }).addTo(map);
-
-    // 3. Initialize WebAssembly
-    wasmEngine = new WasmRasterEngine();
-    const wasmLoaded = await wasmEngine.init('wasm/raster_engine.wasm');
-    if (!wasmLoaded) {
-        alert("Failed to initialize WebAssembly raster engine.");
-        return;
-    }
-
-    // 4. Load Manifest and India State Shapefile
-    try {
-        const [manifestRes, geoRes] = await Promise.all([
-            fetch('data/manifest.json'),
-            fetch('data/india_states.geojson')
-        ]);
-
-        manifest = await manifestRes.json();
-        indiaGeoJSON = await geoRes.json();
-
-        console.log(`Loaded manifest with ${manifest.frames.length} frames.`);
-        console.log(`Loaded India GeoJSON with ${indiaGeoJSON.features.length} state boundaries.`);
-    } catch (e) {
-        console.error("Error loading manifest or GeoJSON:", e);
-        return;
-    }
-
-    // 5. Render India State Boundaries Overlay
-    const stateLayer = L.geoJSON(indiaGeoJSON, {
-        style: {
-            color: '#38bdf8',
-            weight: 1.2,
-            opacity: 0.85,
-            fillColor: 'transparent',
-            fillOpacity: 0.0,
-            dashArray: '2, 3'
-        },
-        onEachFeature: (feature, layer) => {
-            if (feature.properties && feature.properties.Name) {
-                layer.bindTooltip(feature.properties.Name, {
-                    sticky: true,
-                    className: 'custom-state-tooltip'
-                });
-            }
+    // ------------------------------------------------- canvas image overlay
+    // Draws straight onto a <canvas> positioned like an ImageOverlay, so each
+    // frame is a putImageData() instead of a PNG encode + image reload.
+    const CanvasOverlay = L.ImageOverlay.extend({
+        _initImage: function () {
+            const el = this._image = this._url;
+            L.DomUtil.addClass(el, 'leaflet-image-layer');
+            if (this._zoomAnimated) L.DomUtil.addClass(el, 'leaflet-zoom-animated');
+            if (this.options.className) L.DomUtil.addClass(el, this.options.className);
+            el.onselectstart = L.Util.falseFn;
+            el.onmousemove = L.Util.falseFn;
         }
-    }).addTo(map);
+    });
 
-    // 6. Setup Clocks & Time Formatter
-    function formatTimestampIST(isoString) {
-        const d = new Date(isoString);
-        const dateStr = d.toLocaleDateString('en-IN', {
-            timeZone: 'Asia/Kolkata',
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-        });
-        const timeStr = d.toLocaleTimeString('en-IN', {
-            timeZone: 'Asia/Kolkata',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
-        });
-        const utcTime = String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0') + ' UTC';
-        return `${dateStr}, ${timeStr} IST (${utcTime})`;
+    // ------------------------------------------------------------- helpers
+    function frameKey(prod, frame) { return `${prod}_${frame.id}`; }
+
+    function fmtIST(d, opts) {
+        return d.toLocaleString('en-IN', Object.assign({ timeZone: 'Asia/Kolkata' }, opts));
+    }
+    function istTime(d) { return fmtIST(d, { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase(); }
+    function istDate(d) { return fmtIST(d, { day: '2-digit', month: 'short' }); }
+    function utcHM(d) { return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); }
+
+    function ago(ms) {
+        const m = Math.max(0, Math.round(ms / 60000));
+        if (m < 60) return `${m} min ago`;
+        const h = Math.floor(m / 60), r = m % 60;
+        return r && h < 10 ? `${h} h ${r} min ago` : `${h} h ago`;
     }
 
-    function updateClocks() {
-        const now = new Date();
-        document.getElementById('clock-ist').textContent = now.toLocaleTimeString('en-IN', {
-            timeZone: 'Asia/Kolkata',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true
-        }) + ' IST';
-        document.getElementById('clock-utc').textContent = now.toUTCString().slice(17, 25) + ' UTC';
+    function setLoader(text, isError) {
+        const el = $('loader');
+        if (!text) { el.classList.add('hidden'); return; }
+        el.classList.remove('hidden');
+        el.classList.toggle('error', !!isError);
+        $('loader-text').textContent = text;
     }
-    setInterval(updateClocks, 1000);
-    updateClocks();
 
-    // 7. Raster Rendering Engine
-    const offscreenCanvas = document.createElement('canvas');
-    offscreenCanvas.width = manifest.grid.cols;
-    offscreenCanvas.height = manifest.grid.rows;
-    const offCtx = offscreenCanvas.getContext('2d');
+    let toastTimer = null;
+    function toast(msg) {
+        const el = $('toast');
+        el.textContent = msg;
+        el.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+    }
 
-    const rasterBounds = [
-        [manifest.grid.lat_min, manifest.grid.lon_min],
-        [manifest.grid.lat_max, manifest.grid.lon_max]
-    ];
+    // URL hash: #p=LW&pal=0&f=2026111204&z=5&ll=15.00,78.00
+    function readHash() {
+        const out = {};
+        location.hash.replace(/^#/, '').split('&').forEach(kv => {
+            const [k, v] = kv.split('=');
+            if (k) out[k] = decodeURIComponent(v || '');
+        });
+        return out;
+    }
+    let hashTimer = null;
+    function writeHash(map) {
+        clearTimeout(hashTimer);
+        hashTimer = setTimeout(() => {
+            const fr = state.manifest && state.manifest.frames[state.frameIdx];
+            const c = map.getCenter();
+            const parts = [
+                `p=${state.product}`,
+                `pal=${state.palette}`,
+                `f=${state.followLatest || !fr ? 'latest' : fr.id}`,
+                `z=${map.getZoom()}`,
+                `ll=${c.lat.toFixed(2)},${c.lng.toFixed(2)}`
+            ];
+            if (state.convection) parts.push('cv=1');
+            history.replaceState(null, '', '#' + parts.join('&'));
+        }, 300);
+    }
 
-    // Fetch and cache a binary frame
-    async function getFrameData(frameEntry, prodKey) {
-        const path = frameEntry.products[prodKey];
-        if (!path) return null;
+    async function fetchManifest() {
+        const res = await fetch(`data/manifest.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`manifest HTTP ${res.status}`);
+        return res.json();
+    }
 
-        const cacheKey = `${prodKey}_${frameEntry.id}`;
-        if (rawFrameCache.has(cacheKey)) {
-            return rawFrameCache.get(cacheKey);
+    // --------------------------------------------------------------- main
+    document.addEventListener('DOMContentLoaded', async () => {
+        const hash = readHash();
+
+        // Map
+        const startLL = (hash.ll || '').split(',').map(Number);
+        const map = L.map('map', {
+            center: startLL.length === 2 && startLL.every(Number.isFinite) ? startLL : [17.0, 78.0],
+            zoom: Number(hash.z) || 5,
+            minZoom: 3,
+            maxZoom: 10,
+            zoomControl: false,
+            attributionControl: true,
+            worldCopyJump: true
+        });
+        map.attributionControl.setPrefix('');
+        map.attributionControl.addAttribution('Imagery: <a href="https://registry.opendata.aws/noaa-gmgsi/" target="_blank" rel="noopener">NOAA GMGSI</a>');
+        L.control.zoom({ position: 'topleft' }).addTo(map);
+
+        const esriAttr = 'Basemap &copy; Esri';
+        const basemaps = {
+            'esri-dark': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16, attribution: esriAttr }),
+            'esri-sat': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 18, attribution: esriAttr }),
+            'osm': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }),
+            'esri-ocean': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 13, attribution: esriAttr })
+        };
+        let basemap = basemaps['esri-dark'].addTo(map);
+        $('basemap-select').addEventListener('change', (e) => {
+            map.removeLayer(basemap);
+            basemap = basemaps[e.target.value].addTo(map);
+            basemap.bringToBack();
+        });
+
+        // Clocks
+        function tickClocks() {
+            const now = new Date();
+            $('clock-ist').textContent = fmtIST(now, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }).toUpperCase() + ' IST';
+            $('clock-utc').textContent = now.toISOString().slice(11, 19) + ' UTC';
         }
+        tickClocks();
+        setInterval(tickClocks, 1000);
 
+        // WASM + manifest + boundaries
+        setLoader('Loading satellite data…');
+        wasm = new WasmRasterEngine();
+        let geo = null;
         try {
-            const res = await fetch(`data/${path}`);
-            const buf = await res.arrayBuffer();
-            const u8 = new Uint8Array(buf);
-            rawFrameCache.set(cacheKey, u8);
-            return u8;
+            const [ok, manifest, geoJson] = await Promise.all([
+                wasm.init('wasm/raster_engine.wasm'),
+                fetchManifest(),
+                fetch('data/india_states.geojson').then(r => r.ok ? r.json() : null).catch(() => null)
+            ]);
+            if (!ok) throw new Error('WebAssembly engine failed to start');
+            if (!manifest.frames || !manifest.frames.length) throw new Error('No frames are available yet');
+            state.manifest = manifest;
+            geo = geoJson;
         } catch (err) {
-            console.error("Failed to load frame:", path, err);
-            return null;
-        }
-    }
-
-    // Render current frame with WebAssembly
-    async function renderCurrentFrame() {
-        if (!manifest || manifest.frames.length === 0) return;
-
-        const frame = manifest.frames[currentFrameIdx];
-        document.getElementById('frame-timestamp').textContent = formatTimestampIST(frame.timestamp);
-        document.getElementById('timeline-slider').value = currentFrameIdx;
-
-        const rawData = await getFrameData(frame, currentProduct);
-        if (!rawData) return;
-
-        // Process with WASM
-        const imgData = wasmEngine.renderToImageData(
-            rawData,
-            manifest.grid.cols,
-            manifest.grid.rows,
-            {
-                paletteId: currentPalette,
-                brightness: parseFloat(document.getElementById('brightness-slider').value),
-                contrast: parseFloat(document.getElementById('contrast-slider').value),
-                threshMin: 0,
-                threshMax: 255,
-                highlightConvection: isConvectionMode ? 1 : 0
-            }
-        );
-
-        if (!imgData) return;
-
-        offCtx.putImageData(imgData, 0, 0);
-        const dataUrl = offscreenCanvas.toDataURL();
-
-        if (rasterOverlay) {
-            rasterOverlay.setUrl(dataUrl);
-            rasterOverlay.setOpacity(rasterOpacity);
-        } else {
-            rasterOverlay = L.imageOverlay(dataUrl, rasterBounds, {
-                opacity: rasterOpacity,
-                interactive: true
-            }).addTo(map);
-
-            // Re-order layers so state boundaries stay on top
-            stateLayer.bringToFront();
-        }
-    }
-
-    // 8. Timeline Controls
-    const slider = document.getElementById('timeline-slider');
-    slider.max = manifest.frames.length - 1;
-    slider.value = currentFrameIdx;
-
-    slider.addEventListener('input', (e) => {
-        currentFrameIdx = parseInt(e.target.value);
-        renderCurrentFrame();
-    });
-
-    const playBtn = document.getElementById('btn-play');
-    function togglePlay() {
-        isPlaying = !isPlaying;
-        if (isPlaying) {
-            playBtn.innerHTML = '&#10074;&#10074;';
-            playBtn.classList.add('active');
-            playbackInterval = setInterval(() => {
-                currentFrameIdx = (currentFrameIdx + 1) % manifest.frames.length;
-                renderCurrentFrame();
-            }, playbackSpeed);
-        } else {
-            playBtn.innerHTML = '&#9654;';
-            playBtn.classList.remove('active');
-            clearInterval(playbackInterval);
-        }
-    }
-    playBtn.addEventListener('click', togglePlay);
-
-    document.getElementById('btn-prev').addEventListener('click', () => {
-        if (isPlaying) togglePlay();
-        currentFrameIdx = (currentFrameIdx - 1 + manifest.frames.length) % manifest.frames.length;
-        renderCurrentFrame();
-    });
-
-    document.getElementById('btn-next').addEventListener('click', () => {
-        if (isPlaying) togglePlay();
-        currentFrameIdx = (currentFrameIdx + 1) % manifest.frames.length;
-        renderCurrentFrame();
-    });
-
-    // 9. Product Selector (LW, WV, VIS)
-    document.querySelectorAll('.btn-prod').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            document.querySelectorAll('.btn-prod').forEach(b => b.classList.remove('active'));
-            e.target.classList.add('active');
-            currentProduct = e.target.getAttribute('data-prod');
-            
-            // Auto-switch default palette based on channel
-            const paletteSelect = document.getElementById('palette-select');
-            if (currentProduct === 'WV') {
-                paletteSelect.value = "4";
-                currentPalette = 4;
-            } else if (currentProduct === 'VIS') {
-                paletteSelect.value = "5";
-                currentPalette = 5;
-            } else if (currentProduct === 'SW') {
-                paletteSelect.value = "1"; // White-Hot for Shortwave IR
-                currentPalette = 1;
-            } else {
-                paletteSelect.value = "0";
-                currentPalette = 0;
-            }
-            updateLegendGradient();
-            renderCurrentFrame();
-        });
-    });
-
-    // 10. Palette and Filter Controls
-    const paletteSelect = document.getElementById('palette-select');
-    paletteSelect.addEventListener('change', (e) => {
-        currentPalette = parseInt(e.target.value);
-        updateLegendGradient();
-        renderCurrentFrame();
-    });
-
-    document.getElementById('brightness-slider').addEventListener('input', renderCurrentFrame);
-    document.getElementById('contrast-slider').addEventListener('input', renderCurrentFrame);
-
-    const opacitySlider = document.getElementById('opacity-slider');
-    opacitySlider.addEventListener('input', (e) => {
-        rasterOpacity = parseFloat(e.target.value);
-        if (rasterOverlay) rasterOverlay.setOpacity(rasterOpacity);
-    });
-
-    const toggleConvection = document.getElementById('toggle-convection');
-    toggleConvection.addEventListener('click', () => {
-        isConvectionMode = !isConvectionMode;
-        toggleConvection.classList.toggle('active', isConvectionMode);
-        renderCurrentFrame();
-    });
-
-    const toggleBorders = document.getElementById('toggle-borders');
-    toggleBorders.addEventListener('click', () => {
-        if (map.hasLayer(stateLayer)) {
-            map.removeLayer(stateLayer);
-            toggleBorders.classList.remove('active');
-        } else {
-            map.addLayer(stateLayer);
-            stateLayer.bringToFront();
-            toggleBorders.classList.add('active');
-        }
-    });
-
-    // Legend color gradient bar updates
-    function updateLegendGradient() {
-        const bar = document.getElementById('legend-gradient');
-        const minL = document.getElementById('leg-min');
-        const maxL = document.getElementById('leg-max');
-
-        if (currentPalette === 0) { // BD Enhanced IR
-            bar.style.background = 'linear-gradient(to right, #000, #b4b4b4 53%, #b4141e 64%, #e62814 75%, #ffb400 81%, #1ed232 86%, #00e1ff 92%, #143ce6 96%, #fff)';
-            minL.textContent = '+40°C (Surface)';
-            maxL.textContent = '-85°C (Severe Storm Core)';
-        } else if (currentPalette === 1) { // White-Hot
-            bar.style.background = 'linear-gradient(to right, #000, #fff)';
-            minL.textContent = '+40°C';
-            maxL.textContent = '-85°C';
-        } else if (currentPalette === 2) { // Black-Hot
-            bar.style.background = 'linear-gradient(to right, #fff, #000)';
-            minL.textContent = '+40°C';
-            maxL.textContent = '-85°C';
-        } else if (currentPalette === 3) { // Rainbow
-            bar.style.background = 'linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000)';
-            minL.textContent = 'Warm';
-            maxL.textContent = 'Cold';
-        } else if (currentPalette === 4) { // Water Vapor
-            bar.style.background = 'linear-gradient(to right, #50143c, #0a2878 43%, #32b4e6 88%, #ffffff)';
-            minL.textContent = 'Dry Air';
-            maxL.textContent = 'Deep Moisture Plume';
-        } else { // Visible
-            bar.style.background = 'linear-gradient(to right, #111, #fff)';
-            minL.textContent = '0% Albedo';
-            maxL.textContent = '100% Cloud Reflection';
-        }
-    }
-    updateLegendGradient();
-
-    // 11. Mouse / Tap Hover Inspection (Physical Temperature Telemetry)
-    map.on('mousemove', (e) => {
-        const lat = e.latlng.lat;
-        const lng = e.latlng.lng;
-
-        document.getElementById('tel-lat').textContent = lat.toFixed(2) + '°';
-        document.getElementById('tel-lon').textContent = lng.toFixed(2) + '°';
-
-        if (lat < manifest.grid.lat_min || lat > manifest.grid.lat_max ||
-            lng < manifest.grid.lon_min || lng > manifest.grid.lon_max) {
-            document.getElementById('tel-temp').textContent = '--';
-            document.getElementById('tel-raw').textContent = '--';
-            document.getElementById('tel-convection').textContent = 'Outside Indian Ocean Coverage';
+            console.error(err);
+            setLoader(`Could not load the imagery: ${err.message}. Please reload in a minute.`, true);
             return;
         }
 
-        const frame = manifest.frames[currentFrameIdx];
-        const cacheKey = `${currentProduct}_${frame.id}`;
-        const rawData = rawFrameCache.get(cacheKey);
+        const grid = state.manifest.grid;
+        const canvas = document.createElement('canvas');
+        canvas.width = grid.cols;
+        canvas.height = grid.rows;
+        canvas.className = 'sat-canvas';
+        const ctx = canvas.getContext('2d');
+        overlay = new CanvasOverlay(canvas, [[grid.lat_min, grid.lon_min], [grid.lat_max, grid.lon_max]], {
+            opacity: state.opacity, interactive: false
+        }).addTo(map);
 
-        if (!rawData) return;
-
-        // Calculate raster coordinates (Lat is top-down: lat_max -> row 0)
-        const row = Math.floor((manifest.grid.lat_max - lat) / (manifest.grid.lat_max - manifest.grid.lat_min) * manifest.grid.rows);
-        const col = Math.floor((lng - manifest.grid.lon_min) / (manifest.grid.lon_max - manifest.grid.lon_min) * manifest.grid.cols);
-
-        if (row >= 0 && row < manifest.grid.rows && col >= 0 && col < manifest.grid.cols) {
-            const idx = row * manifest.grid.cols + col;
-            const count = rawData[idx];
-            document.getElementById('tel-raw').textContent = count;
-
-            if (currentProduct === 'VIS') {
-                const albedo = (count / 255.0 * 100).toFixed(0);
-                document.getElementById('tel-temp').textContent = `${albedo}%`;
-                document.getElementById('tel-convection').textContent = albedo > 50 ? 'Thick Cloud Deck' : 'Clear / Ground';
-            } else if (currentProduct === 'SW') {
-                const tempC = wasmEngine.getTempCelsius(count);
-                const tempK = wasmEngine.getTempKelvin(count);
-                document.getElementById('tel-temp').textContent = `${tempC.toFixed(1)}°C (${tempK.toFixed(0)}K)`;
-                if (count > 200) {
-                    document.getElementById('tel-convection').textContent = '🌙 Low Stratus / Fog / High Reflection';
-                    document.getElementById('tel-convection').style.color = '#38bdf8';
-                } else if (count < 60) {
-                    document.getElementById('tel-convection').textContent = '🔥 Hotspot / Wildfire / High Radiance';
-                    document.getElementById('tel-convection').style.color = '#f59e0b';
-                } else {
-                    document.getElementById('tel-convection').textContent = '🌫 Nighttime Surface / Clear Sky';
-                    document.getElementById('tel-convection').style.color = '#9ca3af';
+        if (geo) {
+            stateLayer = L.geoJSON(geo, {
+                style: { color: '#7dd3fc', weight: 1, opacity: 0.8, fill: false, dashArray: '2, 3' },
+                onEachFeature: (f, layer) => {
+                    if (f.properties && f.properties.Name) {
+                        layer.bindTooltip(f.properties.Name, { sticky: true, className: 'custom-state-tooltip' });
+                    }
                 }
+            }).addTo(map);
+        } else {
+            $('toggle-borders').disabled = true;
+        }
+
+        const pixelate = () => canvas.classList.toggle('pixelated', map.getZoom() >= 8);
+        map.on('zoomend', pixelate);
+        pixelate();
+
+        // ------------------------------------------------ frame loading
+        function loadFrame(prod, frame) {
+            const path = frame.products[prod];
+            if (!path) return Promise.resolve(null);
+            const key = frameKey(prod, frame);
+            if (frameCache.has(key)) return Promise.resolve(frameCache.get(key));
+            if (inflight.has(key)) return inflight.get(key);
+            const p = fetch(`data/${path}`)
+                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+                .then(buf => {
+                    const u8 = new Uint8Array(buf);
+                    if (u8.length !== grid.rows * grid.cols) throw new Error('unexpected frame size');
+                    frameCache.set(key, u8);
+                    updateBuffered();
+                    return u8;
+                })
+                .catch(err => { console.warn('Frame load failed', path, err); return null; })
+                .finally(() => inflight.delete(key));
+            inflight.set(key, p);
+            return p;
+        }
+
+        async function prefetchProduct(prod) {
+            const token = ++prefetchToken;
+            const frames = state.manifest.frames.slice().reverse(); // newest first
+            let i = 0;
+            const worker = async () => {
+                while (i < frames.length && token === prefetchToken) {
+                    await loadFrame(prod, frames[i++]);
+                }
+            };
+            await Promise.all(Array.from({ length: PREFETCH_CONCURRENCY }, worker));
+        }
+
+        // Slider background shows which frames are buffered
+        function updateBuffered() {
+            const frames = state.manifest.frames;
+            const n = frames.length;
+            if (n < 2) return;
+            const stops = [];
+            frames.forEach((f, i) => {
+                const a = (i / n) * 100, b = ((i + 1) / n) * 100;
+                const has = !f.products[state.product] ? 'rgba(245,158,11,0.35)'
+                    : frameCache.has(frameKey(state.product, f)) ? 'rgba(56,189,248,0.55)' : 'rgba(255,255,255,0.16)';
+                stops.push(`${has} ${a}%`, `${has} ${b}%`);
+            });
+            $('timeline-slider').style.background = `linear-gradient(to right, ${stops.join(',')})`;
+        }
+
+        // ----------------------------------------------------- rendering
+        function render(u8) {
+            const img = wasm.renderToImageData(u8, grid.cols, grid.rows, {
+                paletteId: state.palette,
+                highlightConvection: state.convection ? 1 : 0
+            });
+            if (img) ctx.putImageData(img, 0, 0);
+        }
+
+        function updateFrameLabels() {
+            const frames = state.manifest.frames;
+            const fr = frames[state.frameIdx];
+            const d = new Date(fr.timestamp);
+            $('frame-timestamp').textContent = `${istDate(d)}, ${istTime(d)} IST`;
+            const sub = $('frame-sub');
+            if (!fr.products[state.product]) {
+                sub.textContent = `No ${PRODUCT_NAMES[state.product]} data for this hour`;
+                sub.classList.add('missing');
             } else {
-                const tempC = wasmEngine.getTempCelsius(count);
-                const tempK = wasmEngine.getTempKelvin(count);
-                document.getElementById('tel-temp').textContent = `${tempC.toFixed(1)}°C (${tempK.toFixed(0)}K)`;
+                sub.textContent = `${utcHM(d)} UTC · ${ago(Date.now() - d.getTime())}`;
+                sub.classList.remove('missing');
+            }
+            $('timeline-slider').value = state.frameIdx;
+            $('btn-latest').classList.toggle('at-latest', state.frameIdx === frames.length - 1);
+            document.querySelectorAll('.btn-prod').forEach(b =>
+                b.classList.toggle('unavailable', !fr.products[b.dataset.prod]));
+        }
 
-                if (tempC < -70) {
-                    document.getElementById('tel-convection').textContent = '⚡ Intense Convective Overshoot';
-                    document.getElementById('tel-convection').style.color = '#f43f5e';
-                } else if (tempC < -55) {
-                    document.getElementById('tel-convection').textContent = '⛈ Deep Convective Storm Top';
-                    document.getElementById('tel-convection').style.color = '#fbbf24';
-                } else if (tempC < -30) {
-                    document.getElementById('tel-convection').textContent = '☁ High Altitude Cirrus / Mid Cloud';
-                    document.getElementById('tel-convection').style.color = '#38bdf8';
+        async function showFrame(idx) {
+            const frames = state.manifest.frames;
+            state.frameIdx = Math.max(0, Math.min(frames.length - 1, idx));
+            state.followLatest = state.frameIdx === frames.length - 1;
+            updateFrameLabels();
+            writeHash(map);
+            const token = ++renderToken;
+            const fr = frames[state.frameIdx];
+            const u8 = await loadFrame(state.product, fr);
+            if (token !== renderToken) return;   // a newer request superseded this one
+            if (!u8) { overlay.setOpacity(0); return; }
+            render(u8);
+            overlay.setOpacity(state.opacity);
+            probeRefresh();
+        }
+
+        function rerender() { showFrame(state.frameIdx); }
+
+        // ------------------------------------------------------ timeline
+        const slider = $('timeline-slider');
+        function buildTimeline() {
+            const frames = state.manifest.frames;
+            const n = frames.length;
+            slider.max = n - 1;
+            const ticks = $('timeline-ticks');
+            ticks.innerHTML = '';
+            const step = window.innerWidth < 600 ? 6 : 3;
+            const idxs = [];
+            for (let i = n - 1; i >= 0; i -= step) idxs.unshift(i);
+            let prevDay = null;
+            idxs.forEach(i => {
+                const d = new Date(frames[i].timestamp);
+                const p = n > 1 ? i / (n - 1) : 1;
+                const day = istDate(d);
+                const s = document.createElement('span');
+                if (prevDay && day !== prevDay) {
+                    s.textContent = day;
+                    s.classList.add('day');
                 } else {
-                    document.getElementById('tel-convection').textContent = '🌊 Warm Sea / Land Surface';
-                    document.getElementById('tel-convection').style.color = '#9ca3af';
+                    s.textContent = fmtIST(d, { hour: 'numeric', minute: '2-digit', hour12: true }).replace(' ', '').toLowerCase();
                 }
+                prevDay = day;
+                s.style.left = `calc(${p * 100}% + ${(0.5 - p) * 16}px)`;
+                if (p > 0.97) s.style.transform = 'translateX(-90%)';
+                if (p < 0.03) s.style.transform = 'translateX(-10%)';
+                ticks.appendChild(s);
+            });
+            updateBuffered();
+        }
+
+        slider.addEventListener('input', (e) => { if (state.playing) togglePlay(); showFrame(parseInt(e.target.value, 10)); });
+
+        let playTimer = null;
+        async function playStep() {
+            if (!state.playing) return;
+            const t0 = performance.now();
+            const frames = state.manifest.frames;
+            await showFrame((state.frameIdx + 1) % frames.length);
+            if (!state.playing) return;
+            const dwell = state.frameIdx === frames.length - 1 ? state.speed * 2.5 : state.speed;
+            playTimer = setTimeout(playStep, Math.max(0, dwell - (performance.now() - t0)));
+        }
+        function togglePlay() {
+            state.playing = !state.playing;
+            $('icon-play').hidden = state.playing;
+            $('icon-pause').hidden = !state.playing;
+            $('btn-play').setAttribute('aria-label', state.playing ? 'Pause' : 'Play');
+            clearTimeout(playTimer);
+            if (state.playing) playStep();
+        }
+        $('btn-play').addEventListener('click', togglePlay);
+        $('btn-prev').addEventListener('click', () => { if (state.playing) togglePlay(); showFrame(state.frameIdx - 1); });
+        $('btn-next').addEventListener('click', () => { if (state.playing) togglePlay(); showFrame(state.frameIdx + 1); });
+        $('btn-latest').addEventListener('click', () => { if (state.playing) togglePlay(); showFrame(state.manifest.frames.length - 1); });
+        $('speed-select').addEventListener('change', (e) => { state.speed = parseInt(e.target.value, 10); });
+
+        // ------------------------------------------------------ controls
+        function setProduct(prod, keepPalette) {
+            state.product = prod;
+            document.querySelectorAll('.btn-prod').forEach(b => b.classList.toggle('active', b.dataset.prod === prod));
+            if (!keepPalette) {
+                state.palette = DEFAULT_PALETTE[prod];
+                $('palette-select').value = String(state.palette);
+            }
+            $('tel-temp-label').textContent = prod === 'VIS' ? 'Reflectance (approx.)' : 'Brightness temp (approx.)';
+            updateLegend();
+            updateBuffered();
+            rerender();
+            prefetchProduct(prod);
+        }
+        document.querySelectorAll('.btn-prod').forEach(btn =>
+            btn.addEventListener('click', () => setProduct(btn.dataset.prod)));
+
+        $('palette-select').addEventListener('change', (e) => {
+            state.palette = parseInt(e.target.value, 10);
+            updateLegend();
+            rerender();
+        });
+
+        $('opacity-slider').addEventListener('input', (e) => {
+            state.opacity = parseFloat(e.target.value);
+            overlay.setOpacity(state.opacity);
+        });
+
+        function setConvection(on) {
+            state.convection = on;
+            $('toggle-convection').classList.toggle('active', on);
+            rerender();
+        }
+        $('toggle-convection').addEventListener('click', () => setConvection(!state.convection));
+
+        function toggleBorders() {
+            if (!stateLayer) return;
+            const on = !map.hasLayer(stateLayer);
+            if (on) stateLayer.addTo(map); else map.removeLayer(stateLayer);
+            $('toggle-borders').classList.toggle('active', on);
+        }
+        $('toggle-borders').addEventListener('click', toggleBorders);
+
+        $('btn-layers').addEventListener('click', () => {
+            const row = $('controls-row');
+            const open = row.classList.toggle('open');
+            document.body.classList.toggle('layers-open', open);
+            $('btn-layers').setAttribute('aria-expanded', open);
+        });
+
+        function updateLegend() {
+            const bar = $('legend-gradient'), lo = $('leg-min'), hi = $('leg-max');
+            const p = state.palette;
+            const set = (bg, a, b) => { bar.style.background = bg; lo.textContent = a; hi.textContent = b; };
+            if (p === 0) set('linear-gradient(to right, #000, #b4b4b4 53%, #b4141e 64%, #e62814 75%, #ffb400 81%, #1ed232 86%, #00e1ff 92%, #143ce6 96%, #fff)', '+40°C surface', '-85°C storm core');
+            else if (p === 1) set('linear-gradient(to right, #000, #fff)', state.product === 'VIS' ? 'Dark' : '+40°C', state.product === 'VIS' ? 'Bright' : '-85°C');
+            else if (p === 2) set('linear-gradient(to right, #fff, #000)', '+40°C', '-85°C');
+            else if (p === 3) set('linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000)', 'Warm', 'Cold');
+            else if (p === 4) set('linear-gradient(to right, #50143c, #0a2878 43%, #32b4e6 88%, #ffffff)', 'Dry air', 'Deep moisture');
+            else set('linear-gradient(to right, #111, #fff)', 'Low reflectance', 'Bright cloud');
+        }
+
+        // ------------------------------------------------------- probe
+        let lastProbe = null;
+        function probe(latlng) {
+            lastProbe = latlng;
+            const { lat, lng } = latlng;
+            $('tel-lat').textContent = lat.toFixed(2) + '°';
+            $('tel-lon').textContent = lng.toFixed(2) + '°';
+            const tag = $('tel-convection');
+            const clear = (msg) => { $('tel-temp').textContent = '--'; $('tel-raw').textContent = '--'; tag.textContent = msg; tag.style.color = ''; };
+
+            if (lat < grid.lat_min || lat > grid.lat_max || lng < grid.lon_min || lng > grid.lon_max) {
+                return clear('Outside the imagery extent');
+            }
+            const fr = state.manifest.frames[state.frameIdx];
+            const u8 = frameCache.get(frameKey(state.product, fr));
+            if (!u8) return clear('No data for this frame');
+
+            const row = Math.floor((grid.lat_max - lat) / (grid.lat_max - grid.lat_min) * grid.rows);
+            const col = Math.floor((lng - grid.lon_min) / (grid.lon_max - grid.lon_min) * grid.cols);
+            if (row < 0 || row >= grid.rows || col < 0 || col >= grid.cols) return clear('Outside the imagery extent');
+            const count = u8[row * grid.cols + col];
+            $('tel-raw').textContent = count;
+
+            const say = (msg, color) => { tag.textContent = msg; tag.style.color = color || ''; };
+            if (state.product === 'VIS') {
+                const pct = Math.round(count / 255 * 100);
+                $('tel-temp').textContent = `${pct}%`;
+                say(pct > 50 ? 'Bright, thick cloud' : pct > 25 ? 'Thin cloud / bright surface' : 'Clear, or night-time');
+                return;
+            }
+            const c = wasm.getTempCelsius(count), k = wasm.getTempKelvin(count);
+            $('tel-temp').textContent = `${c.toFixed(1)}°C (${k.toFixed(0)} K)`;
+            if (state.product === 'SW') {
+                if (count > 200) say('Low stratus / fog / high reflection', '#38bdf8');
+                else if (count < 60) say('Hotspot / high radiance', '#f59e0b');
+                else say('Surface or clear sky');
+            } else if (c < -70) say('⚡ Intense convective overshoot', '#f43f5e');
+            else if (c < -55) say('Deep convective storm top', '#fbbf24');
+            else if (c < -30) say('High cirrus / mid-level cloud', '#38bdf8');
+            else say('Warm sea / land surface or low cloud');
+        }
+        function probeRefresh() { if (lastProbe) probe(lastProbe); }
+        map.on('mousemove', (e) => probe(e.latlng));
+        map.on('click', (e) => probe(e.latlng));
+
+        // ------------------------------------------- freshness & refresh
+        function updateStatus() {
+            const m = state.manifest;
+            const latest = new Date(m.frames[m.frames.length - 1].timestamp);
+            const age = (Date.now() - latest.getTime()) / 60000;
+            const chip = $('status-chip');
+            chip.classList.remove('ok', 'warn', 'bad');
+            let label;
+            if (age <= FRESH_MIN) { chip.classList.add('ok'); label = 'LIVE'; }
+            else if (age <= DELAYED_MIN) { chip.classList.add('warn'); label = 'DELAYED'; }
+            else { chip.classList.add('bad'); label = 'STALE'; }
+            $('status-text').textContent = `${label} · latest ${istTime(latest)} IST · ${ago(Date.now() - latest.getTime())}`;
+            chip.title = age > DELAYED_MIN
+                ? 'The update pipeline appears to be behind NOAA. Imagery shown may be several hours old.'
+                : 'NOAA publishes each hourly mosaic about 40 minutes after its nominal time.';
+            const up = m.last_updated ? new Date(m.last_updated) : null;
+            $('dlg-meta').textContent = `${m.frames.length} hourly frames · newest ${istDate(latest)} ${istTime(latest)} IST (${utcHM(latest)} UTC)` +
+                (up ? ` · site checked NOAA ${ago(Date.now() - up.getTime())}` : '');
+            if (!state.playing) updateFrameLabels();
+        }
+
+        async function refreshManifest() {
+            let fresh;
+            try { fresh = await fetchManifest(); } catch (e) { console.warn('Manifest refresh failed', e); return; }
+            const old = state.manifest;
+            const oldLatest = old.frames[old.frames.length - 1].id;
+            const newLatest = fresh.frames.length ? fresh.frames[fresh.frames.length - 1].id : oldLatest;
+            const sameProducts = JSON.stringify(old.frames.map(f => f.products)) === JSON.stringify(fresh.frames.map(f => f.products));
+            if (newLatest === oldLatest && sameProducts) { state.manifest.last_updated = fresh.last_updated; updateStatus(); return; }
+
+            const currentId = old.frames[state.frameIdx].id;
+            state.manifest = fresh;
+            const valid = new Set(fresh.frames.flatMap(f => Object.keys(f.products).map(p => `${p}_${f.id}`)));
+            [...frameCache.keys()].forEach(k => { if (!valid.has(k)) frameCache.delete(k); });
+            buildTimeline();
+            let idx = fresh.frames.findIndex(f => f.id === currentId);
+            if (state.followLatest || idx < 0) idx = fresh.frames.length - 1;
+            if (!state.playing) await showFrame(idx); else state.frameIdx = Math.min(idx, fresh.frames.length - 1);
+            updateStatus();
+            prefetchProduct(state.product);
+            if (newLatest !== oldLatest) {
+                toast(`New frame: ${istTime(new Date(fresh.frames[fresh.frames.length - 1].timestamp))} IST`);
             }
         }
-    });
+        setInterval(refreshManifest, MANIFEST_REFRESH_MS);
+        setInterval(updateStatus, 30000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshManifest(); });
 
-    // Initial render
-    currentFrameIdx = manifest.frames.length - 1; // Start at latest available frame
-    await renderCurrentFrame();
-});
+        // ------------------------------------------------- info & keys
+        const dlg = $('info-dialog');
+        const openInfo = () => { if (dlg.showModal) dlg.showModal(); };
+        $('btn-info').addEventListener('click', openInfo);
+        $('status-chip').addEventListener('click', openInfo);
+
+        document.addEventListener('keydown', (e) => {
+            if (e.target.matches('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+            if (e.key === ' ' && e.target.matches('button')) return;
+            if (dlg.open) return;
+            const prods = { '1': 'LW', '2': 'WV', '3': 'VIS', '4': 'SW' };
+            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); if (state.playing) togglePlay(); showFrame(state.frameIdx - 1); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); if (state.playing) togglePlay(); showFrame(state.frameIdx + 1); }
+            else if (e.key === 'End') { if (state.playing) togglePlay(); showFrame(state.manifest.frames.length - 1); }
+            else if (prods[e.key]) setProduct(prods[e.key]);
+            else if (e.key === 'c' || e.key === 'C') setConvection(!state.convection);
+            else if (e.key === 'b' || e.key === 'B') toggleBorders();
+            else if (e.key === 'i' || e.key === 'I') openInfo();
+        });
+
+        map.on('moveend', () => writeHash(map));
+        window.addEventListener('resize', () => buildTimeline());
+
+        // --------------------------------------------------- first paint
+        const startProduct = PRODUCT_NAMES[hash.p] ? hash.p : 'LW';
+        const pal = parseInt(hash.pal, 10);
+        const hasPal = Number.isInteger(pal) && pal >= 0 && pal <= 5;
+        state.palette = hasPal ? pal : DEFAULT_PALETTE[startProduct];
+        $('palette-select').value = String(state.palette);
+        state.convection = hash.cv === '1';
+        $('toggle-convection').classList.toggle('active', state.convection);
+
+        buildTimeline();
+        let startIdx = state.manifest.frames.length - 1;
+        if (hash.f && hash.f !== 'latest') {
+            const i = state.manifest.frames.findIndex(f => f.id === hash.f);
+            if (i >= 0) startIdx = i;
+        }
+        state.frameIdx = startIdx;
+        state.product = startProduct;
+        document.querySelectorAll('.btn-prod').forEach(b => b.classList.toggle('active', b.dataset.prod === startProduct));
+        $('tel-temp-label').textContent = startProduct === 'VIS' ? 'Reflectance (approx.)' : 'Brightness temp (approx.)';
+        updateLegend();
+        updateStatus();
+        await showFrame(startIdx);
+        setLoader(null);
+        prefetchProduct(state.product);
+    });
+})();

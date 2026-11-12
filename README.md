@@ -21,11 +21,12 @@ Designed to be hosted directly on **GitHub Pages** with **zero server dependenci
   * Clean vector overlay of all 36 Indian States and Union Territories derived from local state boundary shapefiles.
   * Optimized topology with responsive state name tooltips.
 * **🌡️ Interactive Telemetry & Pixel Probing:**
-  * Real-time cursor and touch probing calculating exact physical brightness temperature in both **Celsius (°C)** and **Kelvin (K)**.
+  * Cursor and touch probing with an approximate brightness temperature in **Celsius (°C)** and **Kelvin (K)** (linear conversion from 0–255 counts; indicative only).
 * **⏱️ Smooth Timeline Player:**
   * Interactive 24-hour time scrubber with play, pause, and step-forward/backward animation loop controls.
-* **🤖 Automated Real-Time Cloud Updates (GitHub Actions):**
-  * A GitHub Actions workflow runs every hour, fetches the latest NOAA GMGSI frame from AWS S3, extracts the Indian Ocean slice, and updates the live site automatically.
+* **🤖 Near-real-time updates (GitHub Actions):**
+  * A self-chaining workflow waits for NOAA to publish each hourly mosaic (about HH:39 UTC), extracts the Indian Ocean slice and redeploys the site within minutes.
+  * A freshness badge (LIVE / DELAYED / STALE) shows how old the newest frame is, and open pages pick up new frames automatically every few minutes.
 
 ---
 
@@ -37,7 +38,7 @@ Designed to be hosted directly on **GitHub Pages** with **zero server dependenci
 | **Longitude Extent** | `50.07° E` to `104.94° E` (Arabian Sea, Gulf of Oman, Bay of Bengal, Andaman Sea) |
 | **Grid Dimensions** | 720 Rows × 763 Columns (~549 KB per raw frame) |
 | **Spectral Channels** | **LWIR (10.8 µm)**, **WV (6.7 µm)**, **VIS (0.6 µm)**, **SWIR (3.9 µm)** |
-| **Update Cadence** | Hourly |
+| **Update Cadence** | Hourly; each frame appears on the site ~40–45 min after its nominal time |
 
 ---
 
@@ -45,8 +46,12 @@ Designed to be hosted directly on **GitHub Pages** with **zero server dependenci
 
 To test the application locally on your computer:
 
+Generated imagery is not stored in git, so pull the current frames from the live site first:
+
 ```bash
 cd gmgsi_india_satellite_app
+pip install -r pipeline/requirements.txt
+python pipeline/extract_gmgsi.py --restore-from https://mrafiuddin50.github.io/indian-satellite-tracker/
 python -m http.server 8000
 ```
 
@@ -71,22 +76,19 @@ git push -u origin main
 
 ### 2. Enable GitHub Pages
 
-1. In your GitHub repository, navigate to **Settings** > **Pages** (under "Code and automation").
-2. Under **Build and deployment**:
-   * **Source:** Select `Deploy from a branch`.
-   * **Branch:** Select `main` and folder `/ (root)`.
-3. Click **Save**.
-4. In ~1 minute, your site will be live at:
-   `https://<your-username>.github.io/<your-repo-name>/`
+In **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**. The workflow builds and deploys the site itself.
 
-### 3. Automated Hourly Updates
+### 3. How the automatic updates work
 
-The included workflow [`.github/workflows/update_imagery.yml`](.github/workflows/update_imagery.yml) will:
-1. Automatically run every hour at minute 25.
-2. Download the newest satellite frame from NOAA AWS S3 (`s3://noaa-gmgsi-pds`).
-3. Commit the new frame to your repository, keeping your GitHub Pages dashboard permanently up to date in real-time.
+[`.github/workflows/update_and_deploy.yml`](.github/workflows/update_and_deploy.yml):
 
-You can also trigger it manually anytime under the **Actions** tab by selecting **Auto Update NOAA GMGSI Satellite Imagery** > **Run workflow**.
+1. Restores the frames that are already live on the site (the imagery is **not** committed to git, which keeps the repository small).
+2. Waits until NOAA publishes the next hourly GMGSI mosaic on `s3://noaa-gmgsi-pds` (normally ~HH:39 UTC), extracts it and fills any gaps in the 24-hour window.
+3. Deploys to GitHub Pages, then queues the next run with `workflow_dispatch`, so a run is always waiting for the next frame.
+
+GitHub's `schedule` trigger is best-effort and was firing only every 4–8 hours on this repository, which is why the site used to lag. The cron entries are now only a safety net that restarts the chain. To switch the chain off (for example if you trigger the workflow from an external scheduler), add a repository variable `SELF_CHAIN` = `false`.
+
+You can also run it manually from **Actions → Auto Update Satellite Imagery & Deploy to Pages → Run workflow** (set *wait_minutes* to `0` to deploy immediately).
 
 ---
 
@@ -107,16 +109,13 @@ gmgsi_india_satellite_app/
 │   └── src/lib.rs
 ├── data/
 │   ├── india_states.geojson     # Optimized India state boundaries (EPSG:4326)
-│   ├── manifest.json            # Frame timestamps, bounds, and product indices
-│   └── frames/                  # Compact hourly binary raster slices
-│       ├── LW_*.bin
-│       ├── WV_*.bin
-│       └── VIS_*.bin
+│   ├── manifest.json            # Generated: frame timestamps, bounds, product indices (not in git)
+│   └── frames/                  # Generated: hourly uint8 raster slices LW/WV/VIS/SW_*.bin (not in git)
 ├── pipeline/
 │   ├── extract_gmgsi.py         # NOAA GMGSI S3 ingestion & cropping script
-│   └── requirements.txt         # Python dependencies (xarray, netCDF4, s3fs, numpy)
+│   └── requirements.txt         # Python dependencies (xarray, netCDF4, h5netcdf, s3fs, numpy)
 └── .github/workflows/
-    └── update_imagery.yml       # Hourly GitHub Actions cron workflow
+    └── update_and_deploy.yml    # Wait-for-NOAA, extract, deploy, re-queue
 ```
 
 ---
@@ -127,6 +126,6 @@ The raster compute engine is written in Rust (`no_std`) and compiled directly to
 
 * **Zero Garbage Collection Overhead:** Fixed memory layout with zero allocation during animation frames.
 * **Instant Dynamic Colormapping:** Converts single-channel 8-bit satellite counts into 32-bit RGBA pixels in $< 1\text{ ms}$.
-* **Temperature Formula:** Inverts GMGSI digital counts ($DN$) to physical brightness temperature ($T_b$) via:
+* **Temperature Formula (approximation, indicative only):** Inverts GMGSI digital counts ($DN$) to physical brightness temperature ($T_b$) via:
   $$T_b(^\circ\text{C}) \approx 40.0 - 0.4902 \times DN$$
   $$T_b(\text{K}) = T_b(^\circ\text{C}) + 273.15$$

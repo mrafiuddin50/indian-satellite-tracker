@@ -14,3 +14,8 @@ ENV/
 Thumbs.db
 .vscode/
 .idea/
+
+# Generated imagery (rebuilt by the GitHub Action and restored from the live site; not stored in git)
+data/frames/
+data/manifest.json
+_site/
